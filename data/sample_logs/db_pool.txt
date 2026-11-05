@@ -1,0 +1,5 @@
+2026-11-05 09:14:02,112 ERROR [ClaimCenter] com.guidewire.datasource.DataSourceManager - Cannot get a connection, pool exhausted
+2026-11-05 09:14:02,118 ERROR [ClaimCenter] java.sql.SQLException: Cannot get a connection, pool exhausted
+2026-11-05 09:14:02,120 WARN  [ClaimCenter] Connection pool exhausted: active=50, idle=0, waiting=37
+2026-11-05 09:14:03,004 ERROR [ClaimCenter] Database connection failed for claim search: Connection pool exhausted
+2026-11-05 09:14:03,210 INFO  [ClaimCenter] Retrying database query after connection failure

@@ -1,0 +1,4 @@
+2026-11-05 10:41:19,882 ERROR [ClaimCenter] Payment integration failed: Read timed out calling payment endpoint
+2026-11-05 10:41:19,890 ERROR [ClaimCenter] Connection timed out: downstream payment API did not respond within 30s
+2026-11-05 10:41:20,102 WARN  [ClaimCenter] Retrying integration to external system, attempt 3 of 5
+2026-11-05 10:41:20,455 ERROR [ClaimCenter] Integration timeout on payment issuance for claim CLM-1042

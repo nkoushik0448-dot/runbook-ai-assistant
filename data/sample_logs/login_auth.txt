@@ -1,0 +1,4 @@
+2026-11-05 08:02:11,440 ERROR [ClaimCenter] Authentication failed for user j.smith: Invalid credentials
+2026-11-05 08:02:11,445 ERROR [ClaimCenter] LDAP bind failed: access denied for bind account svc-claimcenter
+2026-11-05 08:02:12,001 WARN  [ClaimCenter] SSO login failed after deployment: user not found
+2026-11-05 08:02:12,310 ERROR [ClaimCenter] Login failed: session could not be created
