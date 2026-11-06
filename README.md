@@ -16,6 +16,11 @@ logs every query so the team can see what was asked and what was found.
 - **Ask a question** — `POST /ask` returns ranked runbook matches with a
   relevance score (0–100), the matched terms, and the full runbook:
   symptoms, checks, steps, and escalation.
+- **Ask the LLM** — `POST /ask-ai` (optional, needs Ollama running
+  locally) returns a short answer written by the local `llama3.2:3b`
+  model, grounded in the retrieved runbooks only, with citations to
+  runbook IDs. No API key, no account. If Ollama is not running it
+  answers 503 instead of fabricating anything.
 - **Triage a log** — `POST /triage` extracts error signals from a pasted
   log snippet, suggests the matching runbook, and explains why.
 - **Browse runbooks** — `GET /runbooks` lists all 8 SAMPLE runbooks.
@@ -28,7 +33,7 @@ logs every query so the team can see what was asked and what was found.
 
 ## How retrieval works — honestly
 
-There is **no LLM API and no API key** in this version. Retrieval is
+`POST /ask` has **no LLM API and no API key**. Retrieval is
 **deterministic keyword scoring** (see `app/retrieval.py`):
 
 1. The input is normalised to lower case.
@@ -43,6 +48,51 @@ verified examples correctly:
 - "integration timeout on payment" → **RB-103** top
 - A database-pool log with "Cannot get a connection" /
   "Connection pool exhausted" → **RB-105** top
+
+## LLM answers with Ollama (optional, local) — POST /ask-ai
+
+`POST /ask-ai` adds a real LLM call on top of the same retrieval
+(see `app/llm.py`). It is a retrieval-grounded (RAG-style) answer,
+without embeddings or a vector database. The model runs entirely on
+your own machine via [Ollama](https://ollama.com) — no API key, no
+account, and nothing leaves the machine:
+
+1. The question is run through the same deterministic retrieval, and
+   the top matching runbooks are taken as context.
+2. Only those runbooks — id, title, symptoms, checks, steps — are
+   sent to the local Ollama model (`llama3.2:3b` by default), with a
+   system prompt that says: answer **only** from the provided
+   runbooks, cite their IDs, and say so plainly when they do not
+   cover the question.
+3. The response returns the model's answer plus the runbooks it was
+   grounded in (with relevance scores), the model name, and
+   `llm_used: true`, so the answer can be checked against its sources.
+   The call is logged to history as type `ask-ai` with the model name.
+
+### Setup
+
+```bash
+# Install Ollama (Linux): https://ollama.com/download
+curl -fsSL https://ollama.com/install.sh | sh
+
+ollama pull llama3.2:3b   # download the model (about 2 GB, once)
+ollama serve              # start the local server, if not already running
+```
+
+The model and server address come from the `OLLAMA_MODEL` and
+`OLLAMA_HOST` environment variables (defaults `llama3.2:3b` and
+`http://localhost:11434`, see `.env.example`).
+
+### When the LLM is not available
+
+- Ollama not running → `POST /ask-ai` returns **503** with
+  `error: "llm_unavailable"` and instructions to start it
+  (`ollama serve`, `ollama pull llama3.2:3b`). No answer is fabricated.
+- Ollama returns an error (e.g. 404 because the model has not been
+  pulled, or a 5xx) or is unreachable → `POST /ask-ai` returns **502**
+  with `error: "llm_upstream_error"`, the upstream status, and the
+  upstream message. No answer is fabricated.
+- `POST /ask` keeps working exactly as before with no Ollama at all.
 
 ## Sample data
 
@@ -67,7 +117,8 @@ uvicorn app.main:app --reload
 ```
 
 The API is then at `http://127.0.0.1:8000`. Interactive docs are at
-`http://127.0.0.1:8000/docs`.
+`http://127.0.0.1:8000/docs`. To use `POST /ask-ai`, Ollama must be
+running locally — see "LLM answers with Ollama" above.
 
 ## API examples (curl)
 
@@ -88,6 +139,11 @@ curl -X POST http://127.0.0.1:8000/triage \
   -H "Content-Type: application/json" \
   --data @<(python3 -c "import json; print(json.dumps({'log': open('data/sample_logs/db_pool.txt').read()}))")
 
+# Ask the LLM (needs Ollama running locally)
+curl -X POST http://127.0.0.1:8000/ask-ai \
+  -H "Content-Type: application/json" \
+  -d '{"question": "ClaimCenter login fails after deployment"}'
+
 # History
 curl http://127.0.0.1:8000/history
 ```
@@ -100,7 +156,9 @@ pytest -v
 
 Tests cover: ask RB-101, ask RB-103, off-topic ask returns an empty
 match, too-short ask returns 422, triage of a DB-pool log returns
-RB-105, and history logging for asks and triages.
+RB-105, history logging for asks and triages, and /ask-ai with a
+mocked Ollama (grounded answer, Ollama-not-running 503, model-not-
+pulled 502, /ask still deterministic with no Ollama).
 
 ## Project structure
 
@@ -108,8 +166,9 @@ RB-105, and history logging for asks and triages.
 runbook-ai-assistant/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py        # FastAPI app: /health, /runbooks, /ask, /triage, /history
+│   ├── main.py        # FastAPI app: /health, /runbooks, /ask, /ask-ai, /triage, /history
 │   ├── retrieval.py   # Deterministic keyword scoring (no LLM)
+│   ├── llm.py         # Ollama LLM call, grounded in retrieved runbooks
 │   └── history.py     # SQLite history logging
 ├── data/
 │   ├── runbooks.json          # 8 SAMPLE runbooks (RB-101–RB-108)
@@ -117,6 +176,7 @@ runbook-ai-assistant/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_ask.py
+│   ├── test_llm.py
 │   ├── test_triage.py
 │   └── test_history.py
 ├── requirements.txt
@@ -125,21 +185,20 @@ runbook-ai-assistant/
 └── .gitignore         # venv, __pycache__, history.db, .env
 ```
 
-## How to add a real LLM API later
+## What is still deliberately simple
 
-This version intentionally has no LLM, so the next step is a clean
-extension, not a rewrite:
-
-1. Keep retrieval as the first step — retrieve the top 1–3 runbooks
-   exactly as now, and pass **only those runbooks** to the model.
-2. Add an LLM call (e.g. OpenAI API) that answers *from the retrieved
-   runbooks only*, with citations to the runbook id and step numbers.
-   Keep the API key in a `.env` file (gitignored), never in code.
-3. Add an evaluation set: a list of questions with the expected
-   runbook id, and a script that reports how often the top match is
-   correct. That turns "it worked on 3 examples" into a measured result.
-4. Consider embeddings / a vector store only after step 3 shows
-   keyword scoring is missing real queries — measure first, then upgrade.
+- Retrieval is deterministic keyword scoring, and the LLM answers
+  only from the retrieved runbooks. The next step is a measured one:
+  build an evaluation set — a list of questions with the expected
+  runbook id — and a script that reports how often the top match is
+  correct. That turns "it worked on 3 examples" into a measured result.
+- Consider embeddings / a vector store only after that evaluation
+  shows keyword scoring is missing real queries — measure first,
+  then upgrade.
+- A cloud LLM API can be added the same way later:
+  keep retrieval as the first step, pass only the retrieved runbooks
+  as context, and keep the API key in a `.env` file (gitignored),
+  never in code.
 
 ## License
 
